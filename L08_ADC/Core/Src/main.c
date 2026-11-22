@@ -22,6 +22,7 @@
 #include "dma.h"
 #include "eth.h"
 #include "i2c.h"
+#include "tim.h"
 #include "usart.h"
 #include "usb_otg.h"
 #include "gpio.h"
@@ -30,6 +31,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,10 +52,19 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-volatile uint32_t ADCValue = 0; // Variable to store the ADC value
-volatile uint32_t ADCConversion = 0;  // Variable to store the ADC conversion result
-uint8_t msgPlot[32];
-uint8_t msgSerial[64];
+volatile uint32_t ADCValue3 = 0; // Variable to store the ADC Channel 3 value
+volatile uint32_t ADCConversion3 = 0;  // Variable to store the ADC Channel 3 conversion result
+volatile uint32_t ADCValue4 = 0; // Variable to store the ADC Channel 4 value
+volatile uint32_t ADCConversion4 = 0;  // Variable to store the ADC Channel 4 conversion result
+uint8_t msgPlot[39];
+uint8_t msgSerial[182];
+volatile uint8_t uartSendFlag = 0; // Flag for UART transmission
+volatile uint8_t currentRank = 0; // Variable to keep track of the current ADC rank
+volatile uint8_t adcNextStep = 0; // Flag to indicate the next ADC step
+float R4 = 5100.0f;
+float V_ntc = 0.0f;
+float R_ntc = 0.0f;
+float T_celsius = 0.0f;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -85,6 +96,30 @@ void HandleLEDStrip(uint32_t value) {
       HAL_GPIO_WritePin(GPIOB, LD2_Pin, GPIO_PIN_SET);
       HAL_GPIO_WritePin(GPIOB, LD3_Pin, GPIO_PIN_SET);
     }
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+    if (htim->Instance == TIM6) {
+        uartSendFlag = 1; // Set the flag to indicate it's time to send data over UART
+    }
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+  if (hadc->Instance == ADC1)
+  {
+    if (currentRank == 0) {
+        ADCValue3 = HAL_ADC_GetValue(hadc);
+        ADCConversion3 = ConvertADCToMillivolts(ADCValue3);
+        HandleLEDStrip(ADCConversion3);
+        currentRank = 1; // Move to the next rank
+    } else if (currentRank == 1) {
+        ADCValue4 = HAL_ADC_GetValue(hadc);
+        ADCConversion4 = ConvertADCToMillivolts(ADCValue4);
+        currentRank = 0; // Reset to the first rank
+    }
+    adcNextStep = 1; // Indicate that the next ADC step can be taken
+  }
 }
 /* USER CODE END PFP */
 
@@ -131,26 +166,43 @@ int main(void)
   MX_I2C1_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
+  MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_TIM_Base_Start_IT(&htim6); // Start the timer with interrupt
+  HAL_ADC_Start_IT(&hadc1); // Start ADC in interrupt mode
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    HAL_ADC_Start(&hadc1);
-    if (HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY) == HAL_OK)
-    {
-      ADCValue = HAL_ADC_GetValue(&hadc1);
-      ADCConversion = ConvertADCToMillivolts(ADCValue);
-      HandleLEDStrip(ADCConversion);
-      int len = sprintf((char*)msgPlot, ">napiecie_mV:%lu\r\n", ADCConversion);
-      int len2 = sprintf((char*)msgSerial, "{\"channel\":\"adc_in%d\", \"voltage\":%lu.%03lu}\r\n", 1, ADCConversion / 1000, ADCConversion % 1000);
-      HAL_UART_Transmit(&huart3, msgPlot, len, 10);
-      HAL_UART_Transmit_IT(&huart3, msgSerial, len2);
+    if (adcNextStep) {
+      adcNextStep = 0;
+      if (currentRank == 1) {
+        SET_BIT(hadc1.Instance->CR2, ADC_CR2_SWSTART); // Start Rank 2
+      } else {
+        HAL_ADC_Start_IT(&hadc1); // Start ADC conversion for Rank 1
+      }
     }
-    HAL_Delay(50); // Delay for 50 milliseconds
+
+    //int len0 = sprintf((char*)msgPlot, ">napiecie_mV3:%lu\r\n>napiecie_mV4:%lu\r\n", ADCConversion3, ADCConversion4);
+    //HAL_UART_Transmit(&huart3, msgPlot, len0, 10);
+    if (uartSendFlag) {
+        uartSendFlag = 0; // Reset the flag
+        
+        V_ntc = (float)ADCConversion4;
+        if (V_ntc >= 3299.0f) {
+            V_ntc = 3299.0f; // Prevent division by zero or negative resistance
+        }
+        R_ntc = (R4 * V_ntc) / (3300.0f - V_ntc); // Calculate NTC resistance
+        T_celsius = (1.0f / ((log(R_ntc / 10000.0f) / 3950.0f) + (1.0f / 298.15f))) - 273.15f; // Calculate temperature in Celsius
+
+        int len2 = sprintf((char*)msgSerial, "{\"channel\":\"adc_in%d\", \"voltage\":%lu.%03lu}\r\n"
+                                             "{\"channel\":\"adc_in%d\", \"voltage\":%.3f, \"RNTC\":%.3f, \"T\":%.3f}\r\n",
+                                              3, ADCConversion3 / 1000, ADCConversion3 % 1000,
+                                              10, V_ntc / 1000.0f, R_ntc, T_celsius);
+        HAL_UART_Transmit_IT(&huart3, msgSerial, len2);
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
