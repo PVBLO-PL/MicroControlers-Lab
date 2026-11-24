@@ -185,8 +185,8 @@ int main(void)
       }
     }
 
-    //int len0 = sprintf((char*)msgPlot, ">napiecie_mV3:%lu\r\n>napiecie_mV4:%lu\r\n", ADCConversion3, ADCConversion4);
-    //HAL_UART_Transmit(&huart3, msgPlot, len0, 10);
+    int len0 = sprintf((char*)msgPlot, ">napiecie_mV3:%lu\r\n>napiecie_mV4:%lu\r\n", ADCConversion3, ADCConversion4);
+    HAL_UART_Transmit(&huart3, msgPlot, len0, 10);
     if (uartSendFlag) {
         uartSendFlag = 0; // Reset the flag
         
