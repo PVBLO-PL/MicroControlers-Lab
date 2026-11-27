@@ -1,9 +1,11 @@
 #MicroXplorer Configuration settings - do not modify
 ADC1.Channel-0\#ChannelRegularConversion=ADC_CHANNEL_3
-ADC1.IPParameters=Rank-0\#ChannelRegularConversion,master,Channel-0\#ChannelRegularConversion,SamplingTime-0\#ChannelRegularConversion,NbrOfConversionFlag
+ADC1.IPParameters=Rank-0\#ChannelRegularConversion,master,Channel-0\#ChannelRegularConversion,SamplingTime-0\#ChannelRegularConversion,NbrOfConversionFlag,InjNumberOfConversion,ScanConvMode
+ADC1.InjNumberOfConversion=0
 ADC1.NbrOfConversionFlag=1
 ADC1.Rank-0\#ChannelRegularConversion=1
 ADC1.SamplingTime-0\#ChannelRegularConversion=ADC_SAMPLETIME_3CYCLES
+ADC1.ScanConvMode=ADC_SCAN_DISABLE
 ADC1.master=1
 CAD.formats=
 CAD.pinconfig=
@@ -115,6 +117,8 @@ NVIC.PendSV_IRQn=true\:0\:0\:false\:false\:true\:true\:false\:false
 NVIC.PriorityGroup=NVIC_PRIORITYGROUP_4
 NVIC.SVCall_IRQn=true\:0\:0\:false\:false\:true\:true\:false\:false
 NVIC.SysTick_IRQn=true\:0\:0\:false\:false\:true\:true\:true\:false
+NVIC.TIM6_DAC_IRQn=true\:0\:0\:false\:false\:true\:true\:true\:true
+NVIC.USART3_IRQn=true\:0\:0\:false\:false\:true\:true\:true\:true
 NVIC.UsageFault_IRQn=true\:0\:0\:false\:false\:true\:true\:false\:false
 PA1.GPIOParameters=GPIO_Label
 PA1.GPIO_Label=RMII_REF_CLK [LAN8742A-CZ-TR_REFCLK0]

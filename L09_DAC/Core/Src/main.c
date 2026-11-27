@@ -30,7 +30,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stdio.h"
+#include "stdlib.h"
+#include "string.h"
+#include "math.h"
+#include "stdbool.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -51,14 +55,119 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+volatile uint32_t adcValue = 0;
+volatile uint32_t adcVoltage = 0; // Variable to store the converted voltage in mV
+volatile uint32_t time = 0;
+volatile uint32_t amplitude = 1000; // Amplitude for the sine wave in mV
+uint8_t plotMsg[32]; // Variable to store the DAC value
+uint8_t rxByte; // Variable to store the received byte
+uint8_t rxCommand[32]; // Buffer to store the received command
+uint8_t responseMsg[64]; // Buffer to store messages for UART transmission
+volatile uint8_t rxLength = 0; // Length of the received command
+volatile bool commandReady = false; // Flag to indicate a complete command is ready
+volatile bool rxDiscard = false; // Flag to indicate if the next bytes should be discarded
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MPU_Config(void);
 /* USER CODE BEGIN PFP */
+void DAC_SetVoltage(uint32_t voltage) {
+  if (voltage > 3300) {
+    voltage = 3300; // Limit to 3.3V
+  }
+  uint32_t dacValue = (voltage * 4095) / 3300; // Convert mV to DAC value
+  HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, dacValue);
+  HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
+}
 
+void DAC_GenerateSine(uint32_t time, uint32_t Amplitude) {
+  if (Amplitude > 1500) {
+    Amplitude = 1500; // Limit amplitude to avoid exceeding DAC range
+  }
+  uint32_t voltage = (Amplitude * sinf(2 * M_PI * time / 1000)) + 1500; // Generate a sine wave voltage
+  uint32_t dacValue = (voltage * 4095) / 3300; // Convert mV to DAC value
+  HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, dacValue);
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+  if (htim->Instance == TIM6) {
+    // Timer 6 interrupt callback
+    time += 5; // Increment time by 5 ms
+    if (time >= 1000) {
+      time = 0; // Reset time after 1 second
+    }
+    DAC_GenerateSine(time, amplitude); // Generate a sine wave with the specified amplitude
+  }
+}
+
+void HandleCommand(uint8_t *command) {
+  char *ptr = (char*)command;
+  while (*ptr == ' ') {
+    ptr++; // Pomiń ewentualne spacje na początku
+  }
+
+  if (strncmp(ptr, "set_amp", 7) == 0) {
+    ptr += 7;
+    while (*ptr == ' ' || *ptr == '=') {
+      ptr++; // Pomiń spacje oraz znak '='
+    }
+
+    if (*ptr == '\0') {
+      int len = snprintf((char*)responseMsg, sizeof(responseMsg), "Error: Missing amplitude value\r\n");
+      HAL_UART_Transmit(&huart3, responseMsg, len, 100);
+      return;
+    }
+
+    int newAmplitude = atoi(ptr);
+    if (newAmplitude >= 0 && newAmplitude <= 1500) {
+      amplitude = (uint32_t)newAmplitude;
+      int len = snprintf((char*)responseMsg, sizeof(responseMsg), "Amplitude set to: %lu mV\r\n", amplitude);
+      HAL_UART_Transmit(&huart3, responseMsg, len, 100);
+    } else {
+      int len = snprintf((char*)responseMsg, sizeof(responseMsg), "Error: Amplitude must be 0..1500 mV\r\n");
+      HAL_UART_Transmit(&huart3, responseMsg, len, 100);
+    }
+  } else {
+    int len = snprintf((char*)responseMsg, sizeof(responseMsg), "Error: Unknown command\r\n");
+    HAL_UART_Transmit(&huart3, responseMsg, len, 100);
+  }
+}
+
+void ReceiveByByte(UART_HandleTypeDef *huart) {
+  char receivedChar = (char)rxByte; // Convert the received byte to a character
+  if(receivedChar == ';') // Check for command termination
+  {
+    rxCommand[rxLength] = '\0'; // Add \0 so it will be compatible with fucntions that expect C string
+    commandReady = true; // Set the flag to indicate a complete command is ready
+    rxLength = 0; // Reset the length for the next command
+    rxDiscard = false; // Reset discard flag
+  }
+  else if(receivedChar == '\r' || receivedChar == '\n') // Ignore carriage return and newline characters
+  {
+
+  }
+  else if(rxLength < sizeof(rxCommand) - 1) // Check if there's space in the buffer
+  {
+    if(!rxDiscard)
+    {
+      rxCommand[rxLength] = receivedChar; // Store the character
+      rxLength++; // Increment index of array iwth our command
+    }
+  }
+  else
+  {
+    rxDiscard = true; // If buffer is full, discard next bytes
+  }
+  HAL_UART_Receive_IT(&huart3, &rxByte, 1); // Continue receiving the next byte
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+  if(huart->Instance == USART3)
+  {
+    ReceiveByByte(huart); // Call the function to handle the received byte
+  }
+}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -107,13 +216,30 @@ int main(void)
   MX_DAC_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
-
+  //DAC_SetVoltage(1650); // Set DAC output to 1.65V (midpoint of 0-3.3V range)
+  HAL_TIM_Base_Start_IT(&htim6); // Start the timer for DAC triggering
+  HAL_DAC_Start(&hdac, DAC_CHANNEL_1); // Start the DAC
+  HAL_UART_Receive_IT(&huart3, &rxByte, 1); // Start receiving the first byte via UART
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    HAL_ADC_Start(&hadc1);
+    if (HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY) == HAL_OK) {
+      adcValue = HAL_ADC_GetValue(&hadc1);
+      // Convert ADC value to voltage in mV
+      adcVoltage = (adcValue * 3300) / 4095;
+      // Here you can use the voltage value as needed
+      int len = snprintf((char*)plotMsg, sizeof(plotMsg), ">ADC_Voltage:%lu mV\r\n", adcVoltage);
+      HAL_UART_Transmit(&huart3, plotMsg, len, HAL_MAX_DELAY); //
+    }
+    if (commandReady) {
+      commandReady = false; // Reset the flag
+      HandleCommand(rxCommand); // Process the received command
+    }
+    HAL_Delay(5); // Delay for 5 ms before the next reading
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
